@@ -102,8 +102,9 @@ header{background:var(--hBg,linear-gradient(135deg,#FFD6EC 0%,#FFC2DC 50%,#FFD6E
 .admin-actions.show{display:flex}
 .btn-edit{flex:1;background:#FFFDE7;border:1.5px solid #FFE082;border-radius:8px;padding:7px;color:#E65100;font-size:12px;font-family:'Nunito',sans-serif;cursor:pointer;font-weight:800;transition:all .2s}
 .btn-edit:hover{background:#FFF9C4}
-.btn-del{flex:1;background:#FFEBEE;border:1.5px solid #FFCDD2;border-radius:8px;padding:7px;color:#B71C1C;font-size:12px;font-family:'Nunito',sans-serif;cursor:pointer;font-weight:800;transition:all .2s}
-.btn-del:hover{background:#FFCDD2}
+.btn-copy{flex:1;background:#E8F5E9;border:1.5px solid #A5D6A7;border-radius:8px;padding:7px;color:#2E7D32;font-size:12px;font-family:'Nunito',sans-serif;cursor:pointer;font-weight:800;transition:all .2s}
+.btn-copy:hover{background:#C8E6C9}
+
 
 /* PROMO */
 .promo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
@@ -761,11 +762,35 @@ header{background:var(--hBg,linear-gradient(135deg,#FFD6EC 0%,#FFC2DC 50%,#FFD6E
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
 const ADMINS=[{user:'ceoEVOS98',pass:'246953'},{user:'ceoEVOS289',pass:'428965'}];
 let isAdmin=false, currentTab='new', currentCatFilter='all';
 let products=[], promos=[], reviews=[], preorders=[];
 let editingProductId=null, editingPromoId=null, editingReviewId=null, editingPreorderId=null;
+
+// =============================================
+// SUPABASE CONFIG — using official JS SDK
+// =============================================
+const SB_URL = 'https://oygfyiuemlfynydgibcu.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95Z2Z5aXVlbWxmeW55ZGdpYmN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5NDQ0MDYsImV4cCI6MjA5NTUyMDQwNn0.IRcVXsCBpM-hx58b7Di3bbgAcWAMjuHmzvnmZP3-_Ls';
+const sb = supabase.createClient(SB_URL, SB_KEY);
+
+// ---- SUPABASE STORAGE ----
+const BUCKET = 'evoshop-images';
+
+async function uploadImageToStorage(file){
+  try{
+    const ext = file.name.split('.').pop().toLowerCase() || 'jpg';
+    const filename = Date.now() + '_' + Math.random().toString(36).slice(2) + '.' + ext;
+    const { data, error } = await sb.storage.from(BUCKET).upload(filename, file, {
+      cacheControl: '3600', upsert: true, contentType: file.type || 'image/jpeg'
+    });
+    if(error){ console.error('Upload error:', error.message); return null; }
+    const { data: urlData } = sb.storage.from(BUCKET).getPublicUrl(filename);
+    return urlData.publicUrl;
+  } catch(e){ console.error('Upload failed:', e); return null; }
+}
 
 // ---- IMAGE PREVIEW (single) ----
 function previewImg(input, previewId, dataId){
@@ -774,18 +799,30 @@ function previewImg(input, previewId, dataId){
   reader.onload=e=>{
     const prev=document.getElementById(previewId);
     prev.src=e.target.result; prev.classList.add('show');
+    // Store the File object for later upload, preview as base64
     document.getElementById(dataId).value=e.target.result;
+    // Tag the input with the actual file for upload
+    input._pendingFile = file;
   };
   reader.readAsDataURL(file);
 }
 
 // ---- MULTI-IMAGE UPLOAD ----
+// Store pending files per gallery
+const _pendingFiles = {};
+
 function addImgsFromInput(input, dataId, galleryId){
   const files=Array.from(input.files); if(!files.length) return;
+  if(!_pendingFiles[galleryId]) _pendingFiles[galleryId]=[];
+  
   let existing=[];
   try{existing=JSON.parse(document.getElementById(dataId).value||'[]')}catch(e){existing=[]}
+  
   let loaded=0;
   files.forEach(file=>{
+    // Store file object for later upload
+    _pendingFiles[galleryId].push(file);
+    // Preview as base64
     const reader=new FileReader();
     reader.onload=e=>{
       existing.push(e.target.result);
@@ -797,7 +834,7 @@ function addImgsFromInput(input, dataId, galleryId){
     };
     reader.readAsDataURL(file);
   });
-  input.value=''; // reset so same file can be re-added if needed
+  input.value=''; // reset input so same file can be added again
 }
 
 function renderGallery(galleryId, dataId){
@@ -815,18 +852,64 @@ function renderGallery(galleryId, dataId){
 function removeImg(idx, dataId, galleryId){
   let imgs=[];
   try{imgs=JSON.parse(document.getElementById(dataId).value||'[]')}catch(e){imgs=[]}
-  imgs.splice(idx,1);
+  
+  // Check if this img is a base64 (pending file) — find which pending index it maps to
+  const removedSrc = imgs[idx];
+  if(removedSrc && removedSrc.startsWith('data:')){
+    // Count how many base64 images are before this index to find pending file index
+    const pendingIdx = imgs.slice(0, idx).filter(s=>s.startsWith('data:')).length;
+    if(_pendingFiles[galleryId] && _pendingFiles[galleryId][pendingIdx]){
+      _pendingFiles[galleryId].splice(pendingIdx, 1);
+    }
+  }
+  
+  imgs.splice(idx, 1);
   document.getElementById(dataId).value=JSON.stringify(imgs);
   renderGallery(galleryId, dataId);
 }
 
 function clearGallery(dataId, galleryId){
   document.getElementById(dataId).value='[]';
+  if(_pendingFiles[galleryId]) _pendingFiles[galleryId]=[];
   const g=document.getElementById(galleryId); if(g) g.innerHTML='';
 }
 
-function getImgsArray(dataId){
-  try{return JSON.parse(document.getElementById(dataId).value||'[]')}catch(e){return[]}
+function getImgsArray(dataId){ try{return JSON.parse(document.getElementById(dataId).value||'[]')}catch(e){return[]} }
+
+// Upload all pending files and return final URLs
+async function uploadPendingAndGetUrls(dataId, galleryId){
+  const previews = getImgsArray(dataId);
+  const pending = (_pendingFiles[galleryId] || []).slice(); // copy
+  
+  if(!pending.length) return previews; // nothing to upload, return as-is
+
+  showLoading('กำลังอัปโหลดภาพ 0/'+pending.length+'...');
+  
+  // Upload all pending files first
+  const uploadedUrls = [];
+  for(let i=0; i<pending.length; i++){
+    showLoading('กำลังอัปโหลดภาพ '+(i+1)+'/'+pending.length+'...');
+    const url = await uploadImageToStorage(pending[i]);
+    uploadedUrls.push(url);
+  }
+
+  // Rebuild final array: replace base64 previews with storage URLs, keep existing storage URLs
+  const finalUrls = [];
+  let uploadIdx = 0;
+  for(let i=0; i<previews.length; i++){
+    const src = previews[i];
+    if(src.startsWith('data:') && uploadIdx < uploadedUrls.length){
+      // New file — use uploaded URL (or fallback to base64 if upload failed)
+      finalUrls.push(uploadedUrls[uploadIdx] || src);
+      uploadIdx++;
+    } else {
+      // Already a storage URL — keep as-is
+      finalUrls.push(src);
+    }
+  }
+
+  _pendingFiles[galleryId] = [];
+  return finalUrls;
 }
 
 // ---- PICK PRE-ORDER → NEW (standalone button from Pre-Order tab) ----
@@ -835,24 +918,101 @@ function openPickPreorderModal(){
   openPickNewModal(); // reuse combined modal, scrolls to pre-order section automatically
 }
 
-// =============================================
-// SUPABASE CONFIG
-// =============================================
-const SB_URL = 'https://oygfyiuemlfynydgibcu.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95Z2Z5aXVlbWxmeW55ZGdpYmN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5NDQ0MDYsImV4cCI6MjA5NTUyMDQwNn0.IRcVXsCBpM-hx58b7Di3bbgAcWAMjuHmzvnmZP3-_Ls';
-
-async function sbFetch(path, opts={}){
-  const res = await fetch(SB_URL+'/rest/v1/'+path, {
-    headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json','Prefer':'return=representation',...(opts.headers||{})},
-    ...opts
-  });
-  if(!res.ok){ const err=await res.text(); console.error('Supabase error:',err); return null; }
-  const text=await res.text();
-  return text?JSON.parse(text):null;
+// ---- DB HELPERS (Supabase JS SDK) ----
+async function sbSelect(table, query=''){
+  try{
+    let q = sb.from(table).select('*').order('created_at', {ascending:true});
+    const { data, error } = await q;
+    if(error){ console.error('Select error:', error.message); return null; }
+    return data;
+  } catch(e){ console.error('Select failed:', e); return null; }
 }
 
-// map DB row → app object
-function rowToProduct(r){
+async function dbSaveProduct(obj, isEdit){
+  const row={name:obj.name,cat:obj.cat,collar:obj.collar,fabric:obj.fabric,
+    size_prices:obj.sizePrices,colors:obj.colors,description:obj.desc,
+    emoji:obj.emoji,is_new:obj.isNew,imgs:obj.imgs,img:obj.img};
+  try{
+    if(isEdit){
+      const {error}=await sb.from('products').update(row).eq('id',obj.id);
+      if(error){console.error('Update error:',error.message);return null;}
+      return true;
+    } else {
+      const {data,error}=await sb.from('products').insert(row).select();
+      if(error){console.error('Insert error:',error.message);return null;}
+      return data;
+    }
+  }catch(e){console.error('Save product failed:',e);return null;}
+}
+
+async function dbSavePreorder(obj, isEdit){
+  const row={name:obj.name,price:obj.price,deposit:obj.deposit,status:obj.status,
+    emoji:obj.emoji,deadline:obj.deadline,delivery:obj.delivery,sizes:obj.sizes,
+    colors:obj.colors,description:obj.desc,imgs:obj.imgs,img:obj.img,is_new:obj.isNew};
+  try{
+    if(isEdit){
+      const {error}=await sb.from('preorders').update(row).eq('id',obj.id);
+      if(error){console.error('Update error:',error.message);return null;}
+      return true;
+    } else {
+      const {data,error}=await sb.from('preorders').insert(row).select();
+      if(error){console.error('Insert error:',error.message);return null;}
+      return data;
+    }
+  }catch(e){console.error('Save preorder failed:',e);return null;}
+}
+
+async function dbSavePromo(obj, isEdit){
+  const row={title:obj.title,discount:obj.discount,badge:obj.badge,description:obj.desc,expires:obj.expires};
+  try{
+    if(isEdit){
+      const {error}=await sb.from('promotions').update(row).eq('id',obj.id);
+      if(error){console.error('Update error:',error.message);return null;}
+      return true;
+    } else {
+      const {data,error}=await sb.from('promotions').insert(row).select();
+      if(error){console.error('Insert error:',error.message);return null;}
+      return data;
+    }
+  }catch(e){console.error('Save promo failed:',e);return null;}
+}
+
+async function dbSaveReview(obj, isEdit){
+  const row={name:obj.name,stars:obj.stars,avatar:obj.avatar,product:obj.product,
+    review_text:obj.text,img:obj.img,review_date:obj.date};
+  try{
+    if(isEdit){
+      const {error}=await sb.from('reviews').update(row).eq('id',obj.id);
+      if(error){console.error('Update error:',error.message);return null;}
+      return true;
+    } else {
+      const {data,error}=await sb.from('reviews').insert(row).select();
+      if(error){console.error('Insert error:',error.message);return null;}
+      return data;
+    }
+  }catch(e){console.error('Save review failed:',e);return null;}
+}
+
+async function dbSaveSetting(key, value){
+  try{
+    const {error}=await sb.from('site_settings').upsert({key,value},{onConflict:'key'});
+    if(error) console.error('Setting error:',error.message);
+  }catch(e){console.error('Save setting failed:',e);}
+}
+
+async function dbDelete(table, id){
+  try{
+    const {error}=await sb.from(table).delete().eq('id',id);
+    if(error) console.error('Delete error:',error.message);
+  }catch(e){console.error('Delete failed:',e);}
+}
+
+async function dbUpdateField(table, id, fields){
+  try{
+    const {error}=await sb.from(table).update(fields).eq('id',id);
+    if(error) console.error('Update field error:',error.message);
+  }catch(e){console.error('Update field failed:',e);}
+}
   return{id:r.id,name:r.name,cat:r.cat||'',collar:r.collar||'',fabric:r.fabric||'',
     sizePrices:r.size_prices||[],colors:r.colors||[],desc:r.description||'',
     emoji:r.emoji||'👕',isNew:r.is_new||false,imgs:r.imgs||[],img:(r.imgs&&r.imgs[0])||r.img||''};
@@ -888,82 +1048,59 @@ function showLoading(msg='กำลังโหลด...'){
 }
 function hideLoading(){ const el=document.getElementById('sb-loading'); if(el) el.style.display='none'; }
 
-// ---- LOAD / SAVE ----
+// ---- LOAD ----
 async function load(){
   showLoading('กำลังโหลดข้อมูล...');
   try{
-    const [pRows,poRows,prRows,rvRows,stRows] = await Promise.all([
-      sbFetch('products?order=created_at.asc'),
-      sbFetch('preorders?order=created_at.asc'),
-      sbFetch('promotions?order=created_at.asc'),
-      sbFetch('reviews?order=created_at.asc'),
-      sbFetch('site_settings?select=key,value')
+    const [
+      {data:pRows,  error:e1},
+      {data:poRows, error:e2},
+      {data:prRows, error:e3},
+      {data:rvRows, error:e4},
+      {data:stRows, error:e5}
+    ] = await Promise.all([
+      sb.from('products').select('*').order('created_at',{ascending:true}),
+      sb.from('preorders').select('*').order('created_at',{ascending:true}),
+      sb.from('promotions').select('*').order('created_at',{ascending:true}),
+      sb.from('reviews').select('*').order('created_at',{ascending:true}),
+      sb.from('site_settings').select('key,value')
     ]);
+
+    if(e1&&e2){ hideLoading(); showConnError(); return; }
+
     products  = (pRows ||[]).map(rowToProduct);
     preorders = (poRows||[]).map(rowToPreorder);
     promos    = (prRows||[]).map(rowToPromo);
     reviews   = (rvRows||[]).map(rowToReview);
-    if(stRows){
+
+    if(stRows&&stRows.length){
       const hd=stRows.find(s=>s.key==='header');
       const bn=stRows.find(s=>s.key==='banner');
-      if(hd&&hd.value) applyHeader(hd.value);
-      if(bn&&bn.value) applyBanner(bn.value);
+      if(hd&&hd.value){ _currentHeader=hd.value; applyHeader(hd.value); }
+      if(bn&&bn.value){ _currentBanner=bn.value; applyBanner(bn.value); }
     }
-  }catch(e){ console.error('Load error:',e); }
+  }catch(e){
+    console.error('Load error:',e);
+    hideLoading(); showConnError(); return;
+  }
   hideLoading(); renderAll();
 }
 
-async function saveData(){ /* data saved per-operation via sbSave* helpers */ }
+function showConnError(){
+  // Show a non-blocking banner instead of breaking the whole page
+  let el=document.getElementById('conn-error-bar');
+  if(!el){
+    el=document.createElement('div');
+    el.id='conn-error-bar';
+    el.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999;background:#FFF3CD;border-bottom:2px solid #FFD600;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;font-weight:700;color:#856404;font-family:Nunito,sans-serif';
+    el.innerHTML=`<span>⚠️ ไม่สามารถเชื่อมต่อ Database ได้ — กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือ <a href="javascript:location.reload()" style="color:#856404;text-decoration:underline">โหลดหน้าใหม่</a></span>
+    <button onclick="document.getElementById('conn-error-bar').remove()" style="background:none;border:none;font-size:18px;cursor:pointer;color:#856404;font-weight:800">×</button>`;
+    document.body.prepend(el);
+  }
+  products=[]; preorders=[]; promos=[]; reviews=[];
+  renderAll();
+}
 
-// per-entity DB save helpers (called after each CRUD)
-async function dbSaveProduct(obj, isEdit){
-  const row={name:obj.name,cat:obj.cat,collar:obj.collar,fabric:obj.fabric,
-    size_prices:obj.sizePrices,colors:obj.colors,description:obj.desc,
-    emoji:obj.emoji,is_new:obj.isNew,imgs:obj.imgs,img:obj.img};
-  if(isEdit){
-    return await sbFetch(`products?id=eq.${obj.id}`,{method:'PATCH',body:JSON.stringify(row)});
-  } else {
-    const res=await sbFetch('products',{method:'POST',body:JSON.stringify(row)});
-    return res&&res[0]?res[0]:null;
-  }
-}
-async function dbSavePreorder(obj, isEdit){
-  const row={name:obj.name,price:obj.price,deposit:obj.deposit,status:obj.status,
-    emoji:obj.emoji,deadline:obj.deadline,delivery:obj.delivery,sizes:obj.sizes,
-    colors:obj.colors,description:obj.desc,imgs:obj.imgs,img:obj.img,is_new:obj.isNew};
-  if(isEdit){
-    return await sbFetch(`preorders?id=eq.${obj.id}`,{method:'PATCH',body:JSON.stringify(row)});
-  } else {
-    const res=await sbFetch('preorders',{method:'POST',body:JSON.stringify(row)});
-    return res&&res[0]?res[0]:null;
-  }
-}
-async function dbSavePromo(obj, isEdit){
-  const row={title:obj.title,discount:obj.discount,badge:obj.badge,description:obj.desc,expires:obj.expires};
-  if(isEdit){
-    return await sbFetch(`promotions?id=eq.${obj.id}`,{method:'PATCH',body:JSON.stringify(row)});
-  } else {
-    const res=await sbFetch('promotions',{method:'POST',body:JSON.stringify(row)});
-    return res&&res[0]?res[0]:null;
-  }
-}
-async function dbSaveReview(obj, isEdit){
-  const row={name:obj.name,stars:obj.stars,avatar:obj.avatar,product:obj.product,
-    review_text:obj.text,img:obj.img,review_date:obj.date};
-  if(isEdit){
-    return await sbFetch(`reviews?id=eq.${obj.id}`,{method:'PATCH',body:JSON.stringify(row)});
-  } else {
-    const res=await sbFetch('reviews',{method:'POST',body:JSON.stringify(row)});
-    return res&&res[0]?res[0]:null;
-  }
-}
-async function dbSaveSetting(key, value){
-  return await sbFetch(`site_settings?key=eq.${key}`,{method:'PATCH',
-    body:JSON.stringify({value}),headers:{'Prefer':'return=minimal'}});
-}
-async function dbDelete(table, id){
-  return await sbFetch(`${table}?id=eq.${id}`,{method:'DELETE',headers:{'Prefer':'return=minimal'}});
-}
 
 // ---- HEADER ----
 function openHeaderModal(){
@@ -1200,6 +1337,7 @@ function productCardHtml(p, inNewTab=false){
       <button class="btn-detail" onclick="openDetail(${p.id})">ดูรายละเอียด 💕</button>
       <div class="admin-actions ${isAdmin&&!inNewTab?'show':''}" id="aa-${p.id}">
         <button class="btn-edit" onclick="openEditProduct(${p.id})">✏️ แก้ไข</button>
+        <button class="btn-copy" onclick="copyProduct(${p.id})">📋 คัดลอก</button>
         <button class="btn-del" onclick="deleteProduct(${p.id})">🗑️ ลบ</button>
       </div>
       ${isAdmin&&inNewTab?`<div style="display:flex;gap:7px;margin-top:8px"><button class="btn-del" onclick="removeFromNew('p',${p.id})">✕ นำออกจาก New</button></div>`:''}
@@ -1222,6 +1360,7 @@ function renderPromos(){
         <div class="promo-expires">📅 หมดเขต: ${pr.expires||'ไม่ระบุ'}</div>
         <div class="promo-admin ${isAdmin?'show':''}" id="pa-${pr.id}">
           <button class="btn-edit" onclick="openEditPromo(${pr.id})">✏️ แก้ไข</button>
+          <button class="btn-copy" onclick="copyPromo(${pr.id})">📋 คัดลอก</button>
           <button class="btn-del" onclick="deletePromo(${pr.id})">🗑️ ลบ</button>
         </div>
       </div>
@@ -1249,6 +1388,7 @@ function preorderCardHtml(po, inNewTab=false){
       <button class="btn-preorder" onclick="openPreorderDetail(${po.id})">📋 ดูรายละเอียด & สั่ง Pre-Order</button>
       <div class="preorder-admin ${isAdmin&&!inNewTab?'show':''}" id="poa-${po.id}">
         <button class="btn-edit" onclick="openEditPreorder(${po.id})">✏️ แก้ไข</button>
+        <button class="btn-copy" onclick="copyPreorder(${po.id})">📋 คัดลอก</button>
         <button class="btn-del" onclick="deletePreorder(${po.id})">🗑️ ลบ</button>
       </div>
       ${isAdmin&&inNewTab?`<div style="display:flex;gap:7px;margin-top:8px"><button class="btn-del" onclick="removeFromNew('po',${po.id})">✕ นำออกจาก New</button></div>`:''}
@@ -1478,10 +1618,13 @@ function openEditProduct(id){
 }
 async function saveProduct(){
   const name=document.getElementById('pName').value.trim();
+  if(!name){document.getElementById('productError').classList.add('show');
+    document.getElementById('productError').textContent='กรุณากรอกชื่อสินค้า';return;}
+  document.getElementById('productError').classList.remove('show');
   const sp=getSizePrices();
-  if(!name||!sp.length){document.getElementById('productError').classList.add('show');return;}
+  showLoading('กำลังอัปโหลดภาพ...');
+  const imgs = await uploadPendingAndGetUrls('pImgsData','pImgGallery');
   showLoading('กำลังบันทึก...');
-  const imgs=getImgsArray('pImgsData');
   const obj={id:editingProductId,name,
     cat:document.getElementById('pCat').value.trim(),
     fabric:document.getElementById('pFabric').value.trim(),
@@ -1530,10 +1673,13 @@ function openEditPreorder(id){
 }
 async function savePreorder(){
   const name=document.getElementById('poName').value.trim();
-  const price=parseFloat(document.getElementById('poPrice').value);
-  if(!name||isNaN(price)){document.getElementById('preorderError').classList.add('show');return;}
+  if(!name){document.getElementById('preorderError').classList.add('show');
+    document.getElementById('preorderError').textContent='กรุณากรอกชื่อสินค้า';return;}
+  document.getElementById('preorderError').classList.remove('show');
+  const price=parseFloat(document.getElementById('poPrice').value)||0;
+  showLoading('กำลังอัปโหลดภาพ...');
+  const imgs = await uploadPendingAndGetUrls('poImgsData','poImgGallery');
   showLoading('กำลังบันทึก...');
-  const imgs=getImgsArray('poImgsData');
   const obj={id:editingPreorderId,name,price,
     deposit:parseFloat(document.getElementById('poDeposit').value)||0,
     status:document.getElementById('poStatus').value,
@@ -1617,6 +1763,16 @@ async function saveReview(){
   const text=document.getElementById('rvText').value.trim();
   if(!name||!text){document.getElementById('reviewError').classList.add('show');return;}
   showLoading('กำลังบันทึก...');
+  // Upload review image if pending
+  let imgUrl = document.getElementById('rvImgData').value||'';
+  const rvInput = document.querySelector('#reviewModal input[type=file]');
+  if(rvInput && rvInput._pendingFile){
+    showLoading('กำลังอัปโหลดภาพ...');
+    const uploaded = await uploadImageToStorage(rvInput._pendingFile);
+    if(uploaded) imgUrl = uploaded;
+    rvInput._pendingFile = null;
+  }
+  showLoading('กำลังบันทึก...');
   const now=new Date();
   const mo=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
   const ds=`${now.getDate()} ${mo[now.getMonth()]} ${now.getFullYear()+543}`;
@@ -1624,7 +1780,7 @@ async function saveReview(){
     stars:parseInt(document.getElementById('rvStars').value),
     avatar:document.getElementById('rvAvatar').value,
     product:document.getElementById('rvProduct').value.trim(),
-    text, img:document.getElementById('rvImgData').value,
+    text, img:imgUrl,
     date:editingReviewId?reviews.find(r=>r.id===editingReviewId)?.date:ds};
   const res=await dbSaveReview(obj,!!editingReviewId);
   if(res!==null){
@@ -1645,10 +1801,10 @@ async function deleteReview(id){
 async function removeFromNew(type, id){
   showLoading('กำลังอัปเดต...');
   if(type==='po'){
-    await sbFetch(`preorders?id=eq.${id}`,{method:'PATCH',body:JSON.stringify({is_new:false}),headers:{'Prefer':'return=minimal'}});
+    await dbUpdateField('preorders', id, {is_new:false});
     preorders=preorders.map(p=>p.id===id?{...p,isNew:false}:p);
   } else {
-    await sbFetch(`products?id=eq.${id}`,{method:'PATCH',body:JSON.stringify({is_new:false}),headers:{'Prefer':'return=minimal'}});
+    await dbUpdateField('products', id, {is_new:false});
     products=products.map(p=>p.id===id?{...p,isNew:false}:p);
   }
   hideLoading(); renderAll();
@@ -1661,16 +1817,56 @@ async function confirmPickNew(){
   pickSelected.forEach(key=>{
     if(key.startsWith('po')){
       const id=parseInt(key.slice(2));
-      ops.push(sbFetch(`preorders?id=eq.${id}`,{method:'PATCH',body:JSON.stringify({is_new:true}),headers:{'Prefer':'return=minimal'}}));
+      ops.push(dbUpdateField('preorders', id, {is_new:true}));
       preorders=preorders.map(p=>p.id===id?{...p,isNew:true}:p);
     } else {
       const id=parseInt(key.slice(1));
-      ops.push(sbFetch(`products?id=eq.${id}`,{method:'PATCH',body:JSON.stringify({is_new:true}),headers:{'Prefer':'return=minimal'}}));
+      ops.push(dbUpdateField('products', id, {is_new:true}));
       products=products.map(p=>p.id===id?{...p,isNew:true}:p);
     }
   });
   await Promise.all(ops);
   hideLoading(); renderAll(); closeModal('pickNewModal');
+}
+
+// ---- COPY FUNCTIONS ----
+async function copyProduct(id){
+  const p=products.find(x=>x.id===id); if(!p) return;
+  showLoading('กำลังคัดลอก...');
+  const obj={...p, id:undefined, name:'(สำเนา) '+p.name, isNew:false};
+  const res=await dbSaveProduct(obj, false);
+  if(res){
+    const newId=Array.isArray(res)?res[0]?.id:res?.id;
+    if(newId) obj.id=newId;
+    products.push(obj);
+  }
+  hideLoading(); renderAll();
+}
+
+async function copyPreorder(id){
+  const po=preorders.find(x=>x.id===id); if(!po) return;
+  showLoading('กำลังคัดลอก...');
+  const obj={...po, id:undefined, name:'(สำเนา) '+po.name, isNew:false};
+  const res=await dbSavePreorder(obj, false);
+  if(res){
+    const newId=Array.isArray(res)?res[0]?.id:res?.id;
+    if(newId) obj.id=newId;
+    preorders.push(obj);
+  }
+  hideLoading(); renderAll();
+}
+
+async function copyPromo(id){
+  const pr=promos.find(x=>x.id===id); if(!pr) return;
+  showLoading('กำลังคัดลอก...');
+  const obj={...pr, id:undefined, title:'(สำเนา) '+pr.title};
+  const res=await dbSavePromo(obj, false);
+  if(res){
+    const newId=Array.isArray(res)?res[0]?.id:res?.id;
+    if(newId) obj.id=newId;
+    promos.push(obj);
+  }
+  hideLoading(); renderAll();
 }
 
 // ---- ADMIN ----
