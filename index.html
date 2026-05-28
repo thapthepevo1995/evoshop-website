@@ -772,8 +772,8 @@ let editingProductId=null, editingPromoId=null, editingReviewId=null, editingPre
 // =============================================
 // SUPABASE CONFIG — using official JS SDK
 // =============================================
-const SB_URL = 'https://oygfyiuemlfynydgibcu.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95Z2Z5aXVlbWxmeW55ZGdpYmN1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5NDQ0MDYsImV4cCI6MjA5NTUyMDQwNn0.IRcVXsCBpM-hx58b7Di3bbgAcWAMjuHmzvnmZP3-_Ls';
+const SB_URL = 'https://rycjohhdgvmwzpdqhtrk.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ5Y2pvaGhkZ3Ztd3pwZHFodHJrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxOTE1ODYsImV4cCI6MjA5NDc2NzU4Nn0.kC8aQStzL6oV-w671RA3V5rIYO-WALZuP03C3qZjEKA';
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
 // ---- SUPABASE STORAGE ----
@@ -1053,15 +1053,15 @@ function hideLoading(){ const el=document.getElementById('sb-loading'); if(el) e
 
 // ---- LOAD ----
 async function load(){
+  // Safety check — ensure Supabase client is initialized
+  if(!sb){
+    try{ sb = supabase.createClient(SB_URL, SB_KEY); }
+    catch(e){ console.error('Supabase init failed:', e); showConnError(); return; }
+  }
+
   showLoading('กำลังโหลดข้อมูล...');
   try{
-    const [
-      {data:pRows,  error:e1},
-      {data:poRows, error:e2},
-      {data:prRows, error:e3},
-      {data:rvRows, error:e4},
-      {data:stRows, error:e5}
-    ] = await Promise.all([
+    const [r1,r2,r3,r4,r5] = await Promise.all([
       sb.from('products').select('*').order('created_at',{ascending:true}),
       sb.from('preorders').select('*').order('created_at',{ascending:true}),
       sb.from('promotions').select('*').order('created_at',{ascending:true}),
@@ -1069,21 +1069,28 @@ async function load(){
       sb.from('site_settings').select('key,value')
     ]);
 
-    if(e1&&e2){ hideLoading(); showConnError(); return; }
+    // Log any errors for debugging
+    [r1,r2,r3,r4,r5].forEach((r,i)=>{ if(r.error) console.error('Query',i,'error:',r.error.message, r.error.details); });
 
-    products  = (pRows ||[]).map(rowToProduct);
-    preorders = (poRows||[]).map(rowToPreorder);
-    promos    = (prRows||[]).map(rowToPromo);
-    reviews   = (rvRows||[]).map(rowToReview);
+    // If ALL queries failed → network/CORS issue
+    if(r1.error && r2.error && r3.error){
+      hideLoading(); showConnError(); return;
+    }
 
-    if(stRows&&stRows.length){
+    products  = (r1.data||[]).map(rowToProduct);
+    preorders = (r2.data||[]).map(rowToPreorder);
+    promos    = (r3.data||[]).map(rowToPromo);
+    reviews   = (r4.data||[]).map(rowToReview);
+
+    const stRows = r5.data||[];
+    if(stRows.length){
       const hd=stRows.find(s=>s.key==='header');
       const bn=stRows.find(s=>s.key==='banner');
       if(hd&&hd.value){ _currentHeader=hd.value; applyHeader(hd.value); }
       if(bn&&bn.value){ _currentBanner=bn.value; applyBanner(bn.value); }
     }
   }catch(e){
-    console.error('Load error:',e);
+    console.error('Load error:', e.message, e);
     hideLoading(); showConnError(); return;
   }
   hideLoading(); renderAll();
@@ -1916,7 +1923,16 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&document.getElementById('loginModal').classList.contains('show')) doLogin();
 });
 
-load();
+// Boot app after all scripts have loaded
+window.addEventListener('load', function(){
+  try{
+    sb = supabase.createClient(SB_URL, SB_KEY);
+    console.log('Supabase client initialized');
+  }catch(e){
+    console.error('Supabase init failed:', e);
+  }
+  load();
+});
 </script>
 </body>
 </html>
