@@ -311,6 +311,7 @@ header{background:var(--hBg,linear-gradient(135deg,#FFD6EC 0%,#FFC2DC 50%,#FFD6E
 ::-webkit-scrollbar-track{background:var(--bg2)}
 ::-webkit-scrollbar-thumb{background:var(--pink4);border-radius:3px}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
 
@@ -762,7 +763,6 @@ header{background:var(--hBg,linear-gradient(135deg,#FFD6EC 0%,#FFC2DC 50%,#FFD6E
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
 const ADMINS=[{user:'ceoEVOS98',pass:'246953'},{user:'ceoEVOS289',pass:'428965'}];
 let isAdmin=false, currentTab='new', currentCatFilter='all';
@@ -1013,6 +1013,9 @@ async function dbUpdateField(table, id, fields){
     if(error) console.error('Update field error:',error.message);
   }catch(e){console.error('Update field failed:',e);}
 }
+
+// map DB row → app object
+function rowToProduct(r){
   return{id:r.id,name:r.name,cat:r.cat||'',collar:r.collar||'',fabric:r.fabric||'',
     sizePrices:r.size_prices||[],colors:r.colors||[],desc:r.description||'',
     emoji:r.emoji||'👕',isNew:r.is_new||false,imgs:r.imgs||[],img:(r.imgs&&r.imgs[0])||r.img||''};
